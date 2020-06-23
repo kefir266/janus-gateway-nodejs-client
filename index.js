@@ -2,14 +2,25 @@ const janus = require('./src/janus');
 
 function Janus(server) {
   const that = this;
-  return  new Promise((resolve, error) => {
-    this.janusConnector = new janus({
-      server,
-      success() {
-        return resolve(that); },
-      error,
-    })
+  this.server = server;
+  return new Promise((resolve, error) => {
+    const intervalID = setInterval(() => {
+      this.connect(() => {
+        clearInterval(intervalID);
+        resolve(that);
+      })
+    }, 1000)
   });
+}
+
+Janus.prototype.connect = function connect(success) {
+  this.janusConnector = new janus({
+    server: this.server,
+    success,
+    error(err) {
+      console.log(err);
+    },
+  })
 }
 
 Janus.prototype.attach = function attach(plugin) {
