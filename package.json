@@ -1,0 +1,27 @@
+{
+  "name": "@kefir/janus-gateway-nodejs-client",
+  "version": "1.0.0",
+  "description": "Janus gateway Nodejs client",
+  "main": "index.js",
+  "scripts": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kefir266/janus-gateway-nodejs-client.git"
+  },
+  "keywords": [
+    "janus-gateway",
+    "videoroom"
+  ],
+  "author": "Dmytro Horbatko",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/kefir266/janus-gateway-nodejs-client/issues"
+  },
+  "homepage": "https://github.com/kefir266/janus-gateway-nodejs-client#readme",
+  "dependencies": {
+    "axios": "^0.19.2",
+    "ws": "^7.3.0"
+  }
+}
