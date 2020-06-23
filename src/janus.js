@@ -337,6 +337,7 @@ Janus.randomString = function (len) {
 
 
 function Janus(gatewayCallbacks) {
+  Janus.createDataChannel = createDataChannel;
   if (!Janus.initDone) {
     gatewayCallbacks.error('Library not initialized');
     return {};

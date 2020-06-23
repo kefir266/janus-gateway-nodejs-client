@@ -13,18 +13,35 @@ function Janus(server) {
 }
 
 Janus.prototype.attach = function attach(plugin) {
+  const that = this;
+  this.name = plugin.name;
   return new Promise((resolve, error) => {
     const pluginObj = Object.assign(plugin, {
       opaqueId: plugin.name + janus.randomString(12),
       success(pluginHandle) {
+        that.pluginHandle = pluginHandle;
         janus.log(`Plugin attached! (${pluginHandle.getPlugin()}, id=${pluginHandle.getId()})`);
-        resolve({ janus, pluginHandle });
+        resolve({ janusLib: janus, pluginHandle });
       },
       error,
     })
     this.janusConnector.attach(pluginObj);
   });
+}
 
+Janus.prototype.join = function join(roomId) {
+  const register = {
+    request: 'join', room: roomId, ptype: 'publisher', display: this.name,
+  };
+  this.pluginHandle.send({
+    message: register,
+    success: (res) => {
+      janus.log('Register publisher', res);
+    },
+    error(err) {
+      janus.log('Error joining room', err);
+    },
+  });
 }
 
 module.exports = Janus;
