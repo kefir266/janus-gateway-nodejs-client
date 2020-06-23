@@ -1,5 +1,6 @@
 const axios = require('axios');
 const WebSocket = require('ws');
+const wrtc = require('electron-webrtc')();
 
 const adapter = Janus.noop;
 
@@ -1743,10 +1744,8 @@ function Janus(gatewayCallbacks) {
         iceTransportPolicy,
         bundlePolicy,
       };
-      if (Janus.webRTCAdapter.browserDetails.browser === 'chrome') {
-        // For Chrome versions before 72, we force a plan-b semantic, and unified-plan otherwise
-        pc_config.sdpSemantics = (Janus.webRTCAdapter.browserDetails.version < 72) ? 'plan-b' : 'unified-plan';
-      }
+      pc_config.sdpSemantics = 'plan-b';
+
       const pc_constraints = {
         optional: [{ DtlsSrtpKeyAgreement: true }],
       };
@@ -1760,13 +1759,9 @@ function Janus(gatewayCallbacks) {
           pc_constraints.optional.push(callbacks.rtcConstraints[i]);
         }
       }
-      if (Janus.webRTCAdapter.browserDetails.browser === 'edge') {
-        // This is Edge, enable BUNDLE explicitly
-        pc_config.bundlePolicy = 'max-bundle';
-      }
       Janus.log('Creating PeerConnection');
       Janus.debug(pc_constraints);
-      config.pc = new RTCPeerConnection(pc_config, pc_constraints);
+      config.pc = new wrtc.RTCPeerConnection(pc_config, pc_constraints);
       Janus.debug(config.pc);
       if (config.pc.getStats) {	// FIXME
         config.volume = {};
@@ -1779,29 +1774,9 @@ function Janus(gatewayCallbacks) {
         }
       };
       config.pc.onicecandidate = function (event) {
-        if (!event.candidate ||
-          (Janus.webRTCAdapter.browserDetails.browser === 'edge' && event.candidate.candidate.indexOf('endOfCandidates') > 0)) {
-          Janus.log('End of candidates.');
-          config.iceDone = true;
-          if (config.trickle === true) {
-            // Notify end of candidates
-            sendTrickleCandidate(handleId, { completed: true });
-          } else {
-            // No trickle, time to send the complete SDP (including all candidates)
-            sendSDP(handleId, callbacks);
-          }
-        } else {
-          // JSON.stringify doesn't work on some WebRTC objects anymore
-          // See https://code.google.com/p/chromium/issues/detail?id=467366
-          const candidate = {
-            candidate: event.candidate.candidate,
-            sdpMid: event.candidate.sdpMid,
-            sdpMLineIndex: event.candidate.sdpMLineIndex,
-          };
-          if (config.trickle === true) {
-            // Send candidate
-            sendTrickleCandidate(handleId, candidate);
-          }
+        if (config.trickle === true) {
+          // Send candidate
+          sendTrickleCandidate(handleId, event);
         }
       };
       config.pc.ontrack = function (event) {
@@ -2154,289 +2129,8 @@ function Janus(gatewayCallbacks) {
       streamsDone(handleId, jsep, media, callbacks, stream);
       return;
     }
-    if (isAudioSendEnabled(media) || isVideoSendEnabled(media)) {
-      if (!Janus.isGetUserMediaAvailable()) {
-        callbacks.error('getUserMedia not available');
-        return;
-      }
-      let constraints = { mandatory: {}, optional: [] };
-      pluginHandle.consentDialog(true);
-      let audioSupport = isAudioSendEnabled(media);
-      if (audioSupport && media && typeof media.audio === 'object') {
-        audioSupport = media.audio;
-      }
-      let videoSupport = isVideoSendEnabled(media);
-      if (videoSupport && media) {
-        const simulcast = (callbacks.simulcast === true);
-        const simulcast2 = (callbacks.simulcast2 === true);
-        if ((simulcast || simulcast2) && !jsep && !media.video) {
-          media.video = 'hires';
-        }
-        if (media.video && media.video != 'screen' && media.video != 'window') {
-          if (typeof media.video === 'object') {
-            videoSupport = media.video;
-          } else {
-            let width = 0;
-            let height = 0,
-              maxHeight = 0;
-            if (media.video === 'lowres') {
-              // Small resolution, 4:3
-              height = 240;
-              maxHeight = 240;
-              width = 320;
-            } else if (media.video === 'lowres-16:9') {
-              // Small resolution, 16:9
-              height = 180;
-              maxHeight = 180;
-              width = 320;
-            } else if (media.video === 'hires' || media.video === 'hires-16:9' || media.video === 'hdres') {
-              // High(HD) resolution is only 16:9
-              height = 720;
-              maxHeight = 720;
-              width = 1280;
-            } else if (media.video === 'fhdres') {
-              // Full HD resolution is only 16:9
-              height = 1080;
-              maxHeight = 1080;
-              width = 1920;
-            } else if (media.video === '4kres') {
-              // 4K resolution is only 16:9
-              height = 2160;
-              maxHeight = 2160;
-              width = 3840;
-            } else if (media.video === 'stdres') {
-              // Normal resolution, 4:3
-              height = 480;
-              maxHeight = 480;
-              width = 640;
-            } else if (media.video === 'stdres-16:9') {
-              // Normal resolution, 16:9
-              height = 360;
-              maxHeight = 360;
-              width = 640;
-            } else {
-              Janus.log('Default video setting is stdres 4:3');
-              height = 480;
-              maxHeight = 480;
-              width = 640;
-            }
-            Janus.log('Adding media constraint:', media.video);
-            videoSupport = {
-              height: { ideal: height },
-              width: { ideal: width },
-            };
-            Janus.log('Adding video constraint:', videoSupport);
-          }
-        } else if (media.video === 'screen' || media.video === 'window') {
-          if (!media.screenshareFrameRate) {
-            media.screenshareFrameRate = 3;
-          }
-          if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
-            // The new experimental getDisplayMedia API is available, let's use that
-            // https://groups.google.com/forum/#!topic/discuss-webrtc/Uf0SrR4uxzk
-            // https://webrtchacks.com/chrome-screensharing-getdisplaymedia/
-            navigator.mediaDevices.getDisplayMedia({ video: true, audio: media.captureDesktopAudio })
-              .then((stream) => {
-                pluginHandle.consentDialog(false);
-                if (isAudioSendEnabled(media) && !media.keepAudio) {
-                  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-                    .then((audioStream) => {
-                      stream.addTrack(audioStream.getAudioTracks()[0]);
-                      streamsDone(handleId, jsep, media, callbacks, stream);
-                    });
-                } else {
-                  streamsDone(handleId, jsep, media, callbacks, stream);
-                }
-              }, (error) => {
-                pluginHandle.consentDialog(false);
-                callbacks.error(error);
-              });
-            return;
-          }
-          // We're going to try and use the extension for Chrome 34+, the old approach
-          // for older versions of Chrome, or the experimental support in Firefox 33+
-          function callbackUserMedia(error, stream) {
-            pluginHandle.consentDialog(false);
-            if (error) {
-              callbacks.error(error);
-            } else {
-              streamsDone(handleId, jsep, media, callbacks, stream);
-            }
-          }
-
-          function getScreenMedia(constraints, gsmCallback, useAudio) {
-            Janus.log('Adding media constraint (screen capture)');
-            Janus.debug(constraints);
-            navigator.mediaDevices.getUserMedia(constraints)
-              .then((stream) => {
-                if (useAudio) {
-                  navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-                    .then((audioStream) => {
-                      stream.addTrack(audioStream.getAudioTracks()[0]);
-                      gsmCallback(null, stream);
-                    });
-                } else {
-                  gsmCallback(null, stream);
-                }
-              })
-              .catch((error) => {
-                pluginHandle.consentDialog(false);
-                gsmCallback(error);
-              });
-          }
-
-          if (Janus.webRTCAdapter.browserDetails.browser === 'chrome') {
-            const chromever = Janus.webRTCAdapter.browserDetails.version;
-            let maxver = 33;
-            if (window.navigator.userAgent.match('Linux')) {
-              maxver = 35;
-            }	// "known" crash in chrome 34 and 35 on linux
-            if (chromever >= 26 && chromever <= maxver) {
-              // Chrome 26->33 requires some awkward chrome://flags manipulation
-              constraints = {
-                video: {
-                  mandatory: {
-                    googLeakyBucket: true,
-                    maxWidth: window.screen.width,
-                    maxHeight: window.screen.height,
-                    minFrameRate: media.screenshareFrameRate,
-                    maxFrameRate: media.screenshareFrameRate,
-                    chromeMediaSource: 'screen',
-                  },
-                },
-                audio: isAudioSendEnabled(media) && !media.keepAudio,
-              };
-              getScreenMedia(constraints, callbackUserMedia);
-            } else {
-              // Chrome 34+ requires an extension
-              Janus.extension.getScreen((error, sourceId) => {
-                if (error) {
-                  pluginHandle.consentDialog(false);
-                  return callbacks.error(error);
-                }
-                constraints = {
-                  audio: false,
-                  video: {
-                    mandatory: {
-                      chromeMediaSource: 'desktop',
-                      maxWidth: window.screen.width,
-                      maxHeight: window.screen.height,
-                      minFrameRate: media.screenshareFrameRate,
-                      maxFrameRate: media.screenshareFrameRate,
-                    },
-                    optional: [
-                      { googLeakyBucket: true },
-                      { googTemporalLayeredScreencast: true },
-                    ],
-                  },
-                };
-                constraints.video.mandatory.chromeMediaSourceId = sourceId;
-                getScreenMedia(
-                  constraints, callbackUserMedia,
-                  isAudioSendEnabled(media) && !media.keepAudio
-                );
-              });
-            }
-          } else if (Janus.webRTCAdapter.browserDetails.browser === 'firefox') {
-            if (Janus.webRTCAdapter.browserDetails.version >= 33) {
-              // Firefox 33+ has experimental support for screen sharing
-              constraints = {
-                video: {
-                  mozMediaSource: media.video,
-                  mediaSource: media.video,
-                },
-                audio: isAudioSendEnabled(media) && !media.keepAudio,
-              };
-              getScreenMedia(constraints, (err, stream) => {
-                callbackUserMedia(err, stream);
-                // Workaround for https://bugzilla.mozilla.org/show_bug.cgi?id=1045810
-                if (!err) {
-                  let lastTime = stream.currentTime;
-                  var polly = window.setInterval(() => {
-                    if (!stream) {
-                      window.clearInterval(polly);
-                    }
-                    if (stream.currentTime == lastTime) {
-                      window.clearInterval(polly);
-                      if (stream.onended) {
-                        stream.onended();
-                      }
-                    }
-                    lastTime = stream.currentTime;
-                  }, 500);
-                }
-              });
-            } else {
-              const error = new Error('NavigatorUserMediaError');
-              error.name = 'Your version of Firefox does not support screen sharing, please install Firefox 33 (or more recent versions)';
-              pluginHandle.consentDialog(false);
-              callbacks.error(error);
-              return;
-            }
-          }
-          return;
-        }
-      }
-      // If we got here, we're not screensharing
-      if (!media || media.video !== 'screen') {
-        // Check whether all media sources are actually available or not
-        navigator.mediaDevices.enumerateDevices().then((devices) => {
-          let audioExist = devices.some(device => device.kind === 'audioinput'),
-            videoExist = isScreenSendEnabled(media) || devices.some(device => device.kind === 'videoinput');
-
-          // Check whether a missing device is really a problem
-          const audioSend = isAudioSendEnabled(media);
-          const videoSend = isVideoSendEnabled(media);
-          const needAudioDevice = isAudioSendRequired(media);
-          const needVideoDevice = isVideoSendRequired(media);
-          if (audioSend || videoSend || needAudioDevice || needVideoDevice) {
-            // We need to send either audio or video
-            const haveAudioDevice = audioSend ? audioExist : false;
-            const haveVideoDevice = videoSend ? videoExist : false;
-            if (!haveAudioDevice && !haveVideoDevice) {
-              // FIXME Should we really give up, or just assume recvonly for both?
-              pluginHandle.consentDialog(false);
-              callbacks.error('No capture device found');
-              return false;
-            } else if (!haveAudioDevice && needAudioDevice) {
-              pluginHandle.consentDialog(false);
-              callbacks.error('Audio capture is required, but no capture device found');
-              return false;
-            } else if (!haveVideoDevice && needVideoDevice) {
-              pluginHandle.consentDialog(false);
-              callbacks.error('Video capture is required, but no capture device found');
-              return false;
-            }
-          }
-
-          const gumConstraints = {
-            audio: (audioExist && !media.keepAudio) ? audioSupport : false,
-            video: (videoExist && !media.keepVideo) ? videoSupport : false,
-          };
-          Janus.debug('getUserMedia constraints', gumConstraints);
-          if (!gumConstraints.audio && !gumConstraints.video) {
-            pluginHandle.consentDialog(false);
-            streamsDone(handleId, jsep, media, callbacks, stream);
-          } else {
-            navigator.mediaDevices.getUserMedia(gumConstraints)
-              .then((stream) => {
-                pluginHandle.consentDialog(false);
-                streamsDone(handleId, jsep, media, callbacks, stream);
-              }).catch((error) => {
-              pluginHandle.consentDialog(false);
-              callbacks.error({ code: error.code, name: error.name, message: error.message });
-            });
-          }
-        })
-          .catch((error) => {
-            pluginHandle.consentDialog(false);
-            callbacks.error('enumerateDevices error', error);
-          });
-      }
-    } else {
       // No need to do a getUserMedia, create offer/answer right away
       streamsDone(handleId, jsep, media, callbacks);
-    }
   }
 
   function prepareWebrtcPeer(handleId, callbacks) {
@@ -2633,32 +2327,7 @@ function Janus(gatewayCallbacks) {
     }
     Janus.debug(mediaConstraints);
     // Check if this is Firefox and we've been asked to do simulcasting
-    const sendVideo = isVideoSendEnabled(media);
-    if (sendVideo && simulcast && Janus.webRTCAdapter.browserDetails.browser === 'firefox') {
-      // FIXME Based on https://gist.github.com/voluntas/088bc3cc62094730647b
-      Janus.log('Enabling Simulcasting for Firefox (RID)');
-      const sender = config.pc.getSenders().find(s => s.track.kind == 'video');
-      if (sender) {
-        let parameters = sender.getParameters();
-        if (!parameters) {
-          parameters = {};
-        }
-
-
-        const maxBitrates = getMaxBitrates(callbacks.simulcastMaxBitrates);
-        parameters.encodings = [
-          { rid: 'h', active: true, maxBitrate: maxBitrates.high },
-          {
-            rid: 'm', active: true, maxBitrate: maxBitrates.medium, scaleResolutionDownBy: 2,
-          },
-          {
-            rid: 'l', active: true, maxBitrate: maxBitrates.low, scaleResolutionDownBy: 4,
-          },
-        ];
-        sender.setParameters(parameters);
-      }
-    }
-    config.pc.createOffer(mediaConstraints)
+    config.pc.createOffer(callbacks.success, callbacks.error)
       .then((offer) => {
         Janus.debug(offer);
         // JSON.stringify doesn't work on some WebRTC objects anymore
@@ -2670,16 +2339,6 @@ function Janus(gatewayCallbacks) {
         callbacks.customizeSdp(jsep);
         offer.sdp = jsep.sdp;
         Janus.log('Setting local description');
-        if (sendVideo && simulcast) {
-          // This SDP munging only works with Chrome (Safari STP may support it too)
-          if (Janus.webRTCAdapter.browserDetails.browser === 'chrome' ||
-            Janus.webRTCAdapter.browserDetails.browser === 'safari') {
-            Janus.log('Enabling Simulcasting for Chrome (SDP munging)');
-            offer.sdp = mungeSdpForSimulcasting(offer.sdp);
-          } else if (Janus.webRTCAdapter.browserDetails.browser !== 'firefox') {
-            Janus.warn('simulcast=true, but this is not Chrome nor Firefox, ignoring');
-          }
-        }
         config.mySdp = offer.sdp;
         config.pc.setLocalDescription(offer)
           .catch(callbacks.error);
@@ -2881,30 +2540,6 @@ function Janus(gatewayCallbacks) {
     }
     Janus.debug(mediaConstraints);
     // Check if this is Firefox and we've been asked to do simulcasting
-    const sendVideo = isVideoSendEnabled(media);
-    if (sendVideo && simulcast && Janus.webRTCAdapter.browserDetails.browser === 'firefox') {
-      // FIXME Based on https://gist.github.com/voluntas/088bc3cc62094730647b
-      Janus.log('Enabling Simulcasting for Firefox (RID)');
-      const sender = config.pc.getSenders()[1];
-      Janus.log(sender);
-      const parameters = sender.getParameters();
-      Janus.log(parameters);
-
-      const maxBitrates = getMaxBitrates(callbacks.simulcastMaxBitrates);
-      sender.setParameters({
-        encodings: [
-          {
-            rid: 'high', active: true, priority: 'high', maxBitrate: maxBitrates.high,
-          },
-          {
-            rid: 'medium', active: true, priority: 'medium', maxBitrate: maxBitrates.medium,
-          },
-          {
-            rid: 'low', active: true, priority: 'low', maxBitrate: maxBitrates.low,
-          },
-        ],
-      });
-    }
     config.pc.createAnswer(mediaConstraints)
       .then((answer) => {
         Janus.debug(answer);
@@ -2917,17 +2552,6 @@ function Janus(gatewayCallbacks) {
         callbacks.customizeSdp(jsep);
         answer.sdp = jsep.sdp;
         Janus.log('Setting local description');
-        if (sendVideo && simulcast) {
-          // This SDP munging only works with Chrome
-          if (Janus.webRTCAdapter.browserDetails.browser === 'chrome') {
-            // FIXME Apparently trying to simulcast when answering breaks video in Chrome...
-            // ~ Janus.log("Enabling Simulcasting for Chrome (SDP munging)");
-            // ~ answer.sdp = mungeSdpForSimulcasting(answer.sdp);
-            Janus.warn('simulcast=true, but this is an answer, and video breaks in Chrome if we enable it');
-          } else if (Janus.webRTCAdapter.browserDetails.browser !== 'firefox') {
-            Janus.warn('simulcast=true, but this is not Chrome nor Firefox, ignoring');
-          }
-        }
         config.mySdp = answer.sdp;
         config.pc.setLocalDescription(answer)
           .catch(callbacks.error);
@@ -3091,58 +2715,6 @@ function Janus(gatewayCallbacks) {
       return 'Invalid PeerConnection';
     }
     // Start getting the bitrate, if getStats is supported
-    if (config.pc.getStats) {
-      if (!config.bitrate.timer) {
-        Janus.log('Starting bitrate timer (via getStats)');
-        config.bitrate.timer = setInterval(() => {
-          config.pc.getStats()
-            .then((stats) => {
-              stats.forEach((res) => {
-                if (!res) {
-                  return;
-                }
-                let inStats = false;
-                // Check if these are statistics on incoming media
-                if ((res.mediaType === 'video' || res.id.toLowerCase().indexOf('video') > -1) &&
-                  res.type === 'inbound-rtp' && res.id.indexOf('rtcp') < 0) {
-                  // New stats
-                  inStats = true;
-                } else if (res.type == 'ssrc' && res.bytesReceived &&
-                  (res.googCodecName === 'VP8' || res.googCodecName === '')) {
-                  // Older Chromer versions
-                  inStats = true;
-                }
-                // Parse stats now
-                if (inStats) {
-                  config.bitrate.bsnow = res.bytesReceived;
-                  config.bitrate.tsnow = res.timestamp;
-                  if (config.bitrate.bsbefore === null || config.bitrate.tsbefore === null) {
-                    // Skip this round
-                    config.bitrate.bsbefore = config.bitrate.bsnow;
-                    config.bitrate.tsbefore = config.bitrate.tsnow;
-                  } else {
-                    // Calculate bitrate
-                    let timePassed = config.bitrate.tsnow - config.bitrate.tsbefore;
-                    if (Janus.webRTCAdapter.browserDetails.browser === 'safari') {
-                      timePassed /= 1000;
-                    }	// Apparently the timestamp is in microseconds, in Safari
-                    let bitRate = Math.round((config.bitrate.bsnow - config.bitrate.bsbefore) * 8 / timePassed);
-                    if (Janus.webRTCAdapter.browserDetails.browser === 'safari') {
-                      bitRate = parseInt(bitRate / 1000);
-                    }
-                    config.bitrate.value = `${bitRate} kbits/sec`;
-                    // ~ Janus.log("Estimated bitrate is " + config.bitrate.value);
-                    config.bitrate.bsbefore = config.bitrate.bsnow;
-                    config.bitrate.tsbefore = config.bitrate.tsnow;
-                  }
-                }
-              });
-            });
-        }, 1000);
-        return '0 kbits/sec';	// We don't have a bitrate value yet
-      }
-      return config.bitrate.value;
-    }
     Janus.warn('Getting the video bitrate unsupported by browser');
     return 'Feature unsupported by browser';
   }
@@ -3559,10 +3131,6 @@ function Janus(gatewayCallbacks) {
 
   function isDataEnabled(media) {
     Janus.debug('isDataEnabled:', media);
-    if (Janus.webRTCAdapter.browserDetails.browser === 'edge') {
-      Janus.warn("Edge doesn't support data channels yet");
-      return false;
-    }
     if (media === undefined || media === null) {
       return false;
     }	// Default

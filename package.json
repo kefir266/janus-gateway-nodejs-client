@@ -22,6 +22,7 @@
   "homepage": "https://github.com/kefir266/janus-gateway-nodejs-client#readme",
   "dependencies": {
     "axios": "^0.19.2",
+    "electron-webrtc": "^0.3.0",
     "ws": "^7.3.0"
   }
 }
