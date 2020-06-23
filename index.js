@@ -30,18 +30,23 @@ Janus.prototype.attach = function attach(plugin) {
 }
 
 Janus.prototype.join = function join(roomId) {
-  const register = {
-    request: 'join', room: roomId, ptype: 'publisher', display: this.name,
-  };
-  this.pluginHandle.send({
-    message: register,
-    success: (res) => {
-      janus.log('Register publisher', res);
-    },
-    error(err) {
-      janus.log('Error joining room', err);
-    },
+  return new Promise((resolve, reject) => {
+    const register = {
+      request: 'join', room: roomId, ptype: 'publisher', display: this.name,
+    };
+    this.pluginHandle.send({
+      message: register,
+      success: () => {
+        janus.log('Register publisher', register);
+        resolve();
+      },
+      error(err) {
+        janus.log('Error joining room', err);
+        reject(err);
+      },
+    });
   });
+
 }
 
 module.exports = Janus;
