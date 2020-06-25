@@ -1463,7 +1463,7 @@ function Janus(gatewayCallbacks) {
     };
     const onDataChannelStateChange = function (event) {
       Janus.log('Received state change on data channel:', event);
-      const label = event.target.label;
+      const label = event.target ? event.target.label : 'null';
       const dcState = config.dataChannel[label] ? config.dataChannel[label].readyState : 'null';
       Janus.log(`State change on <${label}> data channel: ${dcState}`);
       if (dcState === 'open') {
