@@ -2,8 +2,7 @@ const janus = require('./src/janus');
 
 function Janus(options) {
   const that = this;
-  this.server = options.server;
-  this.debug = options.debug || 'error';
+  this.options = options;
   return new Promise((resolve, error) => {
     const intervalID = setInterval(() => {
       this.connect(() => {
@@ -16,8 +15,7 @@ function Janus(options) {
 
 Janus.prototype.connect = function connect(success) {
   this.janusConnector = new janus({
-    server: this.server,
-    debug: this.debug,
+    ...this.options,
     success,
     error(err) {
       console.log(err);
