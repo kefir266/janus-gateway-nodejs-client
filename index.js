@@ -27,7 +27,8 @@ Janus.prototype.attach = function attach(plugin) {
   const that = this;
   this.name = plugin.name;
   return new Promise((resolve, error) => {
-    const pluginObj = Object.assign(plugin, {
+    this.janusConnector.attach({
+      ...plugin,
       opaqueId: plugin.name + janus.randomString(12),
       success(pluginHandle) {
         that.pluginHandle = pluginHandle;
@@ -35,8 +36,7 @@ Janus.prototype.attach = function attach(plugin) {
         resolve({ janusLib: janus, pluginHandle });
       },
       error,
-    })
-    this.janusConnector.attach(pluginObj);
+    });
   });
 }
 
